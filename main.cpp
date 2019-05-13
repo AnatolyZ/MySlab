@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include <vector>
 using namespace std;
 
 
@@ -31,10 +32,17 @@ void free_slab(void *slab);
  * просто дают общую идею того, что вам может понадобится
  * сохранить в этой структуре.
  **/
+#define MIN_OBJECT_NUM 32
+
+struct slab_t{
+    uint8_t* data;
+    size_t free_counter;
+    slab_t* next;
+};
 struct cache {
-    /* список пустых SLAB-ов для поддержки cache_shrink */
-    /* список частично занятых SLAB-ов */
-    /* список заполненых SLAB-ов */
+    slab_t* empty_slabs;/* список пустых SLAB-ов для поддержки cache_shrink */
+    slab_t* partial_slabs;/* список частично занятых SLAB-ов */
+    slab_t* full_slabs;/* список заполненых SLAB-ов */
 
     size_t object_size; /* размер аллоцируемого объекта */
     int slab_order; /* используемый размер SLAB-а */
@@ -52,7 +60,10 @@ struct cache {
  **/
 void cache_setup(struct cache *cache, size_t object_size)
 {
-    /* Реализуйте эту функцию. */
+    cache->empty_slabs = nullptr;
+    cache->partial_slabs = nullptr;
+    cache->full_slabs = nullptr;
+
 }
 
 
