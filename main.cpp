@@ -1,9 +1,42 @@
+#include <stdlib.h>
 #include <iostream>
-
 #include <vector>
+#include <math.h>
 using namespace std;
 
+// Assume we need 32-byte alignment for AVX instructions
 
+size_t getSize(int order)
+{
+    return 4096 * pow(2,order);
+}
+
+void *aligned_malloc(size_t size, int align)
+{
+    // We require whatever user asked for PLUS space for a pointer
+    // PLUS space to align pointer as per alignment requirement
+    void *mem = malloc(size + sizeof(void*) + (align - 1));
+
+    // Location that we will return to user
+    // This has space *behind* it for a pointer and is aligned
+    // as per requirement
+    void *ptr = (void**)((uintptr_t) (mem + (align - 1) + sizeof(void*)) & ~(align - 1));
+
+    // Sneakily store address returned by malloc *behind* user pointer
+    // void** cast is cause void* pointer cannot be decremented, cause
+    // compiler has no idea "how many" bytes to decrement by
+    ((void **) ptr)[-1] = mem;
+
+    // Return user pointer
+    return ptr;
+}
+
+void aligned_free(void *ptr)
+{
+    // Sneak *behind* user pointer to find address returned by malloc
+    // Use that address to free
+    free(((void**) ptr)[-1]);
+}
 /**
  * Эти две функции вы должны использовать для аллокации
  * и освобождения памяти в этом задании. Считайте, что
@@ -18,13 +51,18 @@ using namespace std;
  * включительно), т. е. вы не можете аллоцировать больше
  * 4Mb за раз.
  **/
-void *alloc_slab(int order);
+
+void *alloc_slab(int order){
 /**
  * Освобождает участок ранее аллоцированный с помощью
  * функции alloc_slab.
  **/
-void free_slab(void *slab);
-
+    size_t as = getSize(order);
+    return aligned_malloc(as,as);
+}
+void free_slab(void *slab){
+    aligned_free(slab);
+}
 
 /**
  * Эта структура представляет аллокатор, вы можете менять
@@ -32,7 +70,8 @@ void free_slab(void *slab);
  * просто дают общую идею того, что вам может понадобится
  * сохранить в этой структуре.
  **/
-#define MIN_OBJECT_NUM 32
+#define MIN_OBJECTS_NUM 1
+#define MAX_OBJECTS_NUM 64
 
 struct slab_t{
     uint8_t* data;
@@ -50,6 +89,25 @@ struct cache {
 };
 
 
+
+void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
+   size_t slab_size = 4096;
+   int tmp_order = 0;
+   while (slab_size/obj_size < MAX_OBJECTS_NUM && tmp_order < 10)
+   {
+       tmp_order++;
+       slab_size *= 2;
+   }
+   *slab_order = tmp_order;
+   size_t tmp_number = slab_size/obj_size;
+   size_t meta = tmp_number*sizeof(void*) + sizeof(slab_t);
+   while (meta + obj_size*tmp_number > slab_size){
+        tmp_number--;
+        meta = tmp_number*sizeof(void*) + sizeof(slab_t);
+   }
+   *obj_number = tmp_number;
+}
+
 /**
  * Функция инициализации будет вызвана перед тем, как
  * использовать это кеширующий аллокатор для аллокации.
@@ -58,15 +116,15 @@ struct cache {
  *  - object_size - размер объектов, которые должен
  *    аллоцировать этот кеширующий аллокатор
  **/
+
 void cache_setup(struct cache *cache, size_t object_size)
 {
-    cache->empty_slabs = nullptr;
-    cache->partial_slabs = nullptr;
-    cache->full_slabs = nullptr;
-
+    cache->empty_slabs = NULL;
+    cache->partial_slabs = NULL;
+    cache->full_slabs = NULL;
+    cache->object_size = object_size;
+    getSlabParam(object_size, &cache->slab_order, &cache->slab_objects);
 }
-
-
 /**
  * Функция освобождения будет вызвана когда работа с
  * аллокатором будет закончена. Она должна освободить
@@ -122,6 +180,11 @@ void cache_shrink(struct cache *cache)
 
 int main()
 {
-    cout << "Hello world!" << endl;
+    int slab_;
+    size_t obj_;
+    getSlabParam(512, &slab_, &obj_);
+
+    cout << "Aligned pointer: " << alloc_slab(0) << endl;
+    cout << "For " << obj_ << " objects of 512 bytes " << slab_ << " level slab fits" << endl;
     return 0;
 }
