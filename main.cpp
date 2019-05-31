@@ -192,6 +192,8 @@ void *cache_alloc(struct cache *cache)
 void cache_free(struct cache *cache, void *ptr)
 {
     /* Реализуйте эту функцию. */
+    void *slab_data_ptr = (void*)((int)ptr & (~0 << (cache->slab_order + 12)));
+    cout << slab_data_ptr << endl;
 }
 
 /**
@@ -210,9 +212,16 @@ int main()
 {
     cache test_cache;
     cache_setup(&test_cache,100);
+    /*
     for (int i = 0; i < 79 ; i++){
         cout << cache_alloc(&test_cache) << endl;
     }
-
+*/
+    cout << cache_alloc(&test_cache) << endl;
+    cout << cache_alloc(&test_cache) << endl;
+    cout << cache_alloc(&test_cache) << endl;
+    void *ptr = cache_alloc(&test_cache);
+    cout << ptr << endl;
+    cache_free(&test_cache,ptr);
     return 0;
 }
