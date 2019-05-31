@@ -1,36 +1,30 @@
 #include <stdlib.h>
 #include <iostream>
-#include <vector>
+#include <list>
 #include <math.h>
 using namespace std;
 
 // Assume we need 32-byte alignment for AVX instructions
-
 size_t getSize(int order)
 {
     return 4096 * pow(2,order);
 }
-
 void *aligned_malloc(size_t size, int align)
 {
     // We require whatever user asked for PLUS space for a pointer
     // PLUS space to align pointer as per alignment requirement
     void *mem = malloc(size + sizeof(void*) + (align - 1));
-
     // Location that we will return to user
     // This has space *behind* it for a pointer and is aligned
     // as per requirement
     void *ptr = (void**)((uintptr_t) (mem + (align - 1) + sizeof(void*)) & ~(align - 1));
-
     // Sneakily store address returned by malloc *behind* user pointer
     // void** cast is cause void* pointer cannot be decremented, cause
     // compiler has no idea "how many" bytes to decrement by
     ((void **) ptr)[-1] = mem;
-
     // Return user pointer
     return ptr;
 }
-
 void aligned_free(void *ptr)
 {
     // Sneak *behind* user pointer to find address returned by malloc
@@ -74,21 +68,34 @@ void free_slab(void *slab){
 #define MAX_OBJECTS_NUM 64
 
 struct slab_t{
-    void* data;
-    size_t* free_counter;
-    slab_t* next;
+    void *data;
+    size_t free_obj;
+    list<void*> obj_list;
 };
-struct cache {
-    slab_t* empty_slabs;/* список пустых SLAB-ов для поддержки cache_shrink */
-    slab_t* partial_slabs;/* список частично занятых SLAB-ов */
-    slab_t* full_slabs;/* список заполненых SLAB-ов */
 
+struct cache {
+    list<slab_t> free_slabs;
+    list<slab_t> partial_slabs;
+    list<slab_t> full_slabs;
     size_t object_size; /* размер аллоцируемого объекта */
     int slab_order; /* используемый размер SLAB-а */
     size_t slab_objects; /* количество объектов в одном SLAB-е */
 };
 
-
+void initSlab(slab_t *pSlab, struct cache *cache)
+{
+    pSlab->data = alloc_slab(cache->slab_order);
+    size_t n = cache->slab_objects;
+    pSlab->free_obj = n;
+    void *obj_ptr = pSlab->data;
+    while(n) {
+        pSlab->obj_list.push_back(obj_ptr);
+        obj_ptr += cache->object_size;
+        --n;
+    }
+    cout << "Slab initialized at: " << pSlab->data << ". Number of objects: " << pSlab->obj_list.size() << endl;
+    cout << "Last object: " << pSlab->obj_list.back() << " Object size:" << cache->object_size<< endl;
+}
 
 void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
    size_t slab_size = 4096;
@@ -119,11 +126,10 @@ void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
 
 void cache_setup(struct cache *cache, size_t object_size)
 {
-    cache->empty_slabs = NULL;
-    cache->partial_slabs = NULL;
-    cache->full_slabs = NULL;
-    cache->object_size = object_size;
     getSlabParam(object_size, &cache->slab_order, &cache->slab_objects);
+    cache->object_size = object_size;
+    cout << "Initialized cache. Obj_number: " << cache->slab_objects <<
+    ". Slab order: " << cache->slab_order << endl;
 }
 /**
  * Функция освобождения будет вызвана когда работа с
@@ -134,24 +140,8 @@ void cache_setup(struct cache *cache, size_t object_size)
  **/
 void cache_release(struct cache *cache)
 {
-    slab_t * tmp_next;
-    while (cache->empty_slabs != 0){
-        tmp_next = cache->empty_slabs->next;
-        free_slab( (void*)((size_t)(cache->empty_slabs->data) & (~0 << (cache->slab_order + 12))));
-        cache->empty_slabs = tmp_next;
-    }
-    while (cache->partial_slabs != 0){
-        tmp_next = cache->partial_slabs->next;
-        free_slab(cache->partial_slabs->data);
-        cache->partial_slabs = tmp_next;
-    }
-    while (cache->full_slabs != 0){
-        tmp_next = cache->full_slabs->next;
-        free_slab(cache->full_slabs->data);
-        cache->full_slabs = tmp_next;
-    }
-}
 
+}
 
 /**
  * Функция аллокации памяти из кеширующего аллокатора.
@@ -162,8 +152,34 @@ void cache_release(struct cache *cache)
  **/
 void *cache_alloc(struct cache *cache)
 {
-    if (cache->partial_slabs != 0) {
-
+    if (cache->partial_slabs.empty()) {
+        if (cache->free_slabs.empty()) {
+            cout << "New empty slab" << endl;
+            slab_t slab;
+            initSlab(&slab,cache);
+            cout << "Empty slab became partial" << endl;
+            cache->partial_slabs.push_back(slab);
+            void *ptr = cache->partial_slabs.back().obj_list.back();
+            cache->partial_slabs.back().obj_list.pop_back();
+            cache->partial_slabs.back().free_obj--;
+            return ptr;
+        }
+        cout << "Alloc from free slab" << endl;
+        void *ptr = cache->free_slabs.back().obj_list.back();
+        cache->free_slabs.back().obj_list.pop_back();
+        return ptr;
+    } else {
+        cout << "Alloc from partial slab" << endl;
+        void *ptr = cache->partial_slabs.back().obj_list.back();
+        cache->partial_slabs.back().obj_list.pop_back();
+        cache->partial_slabs.back().free_obj--;
+        if (cache->partial_slabs.back().free_obj == 0) {
+            cout << "Partial is full" << endl;
+            cache->full_slabs.push_back(cache->partial_slabs.back());
+            cache->partial_slabs.pop_back();
+            cout << "Full slabs: " << cache->full_slabs.size() << endl;
+        }
+        return ptr;
     }
 }
 
@@ -178,7 +194,6 @@ void cache_free(struct cache *cache, void *ptr)
     /* Реализуйте эту функцию. */
 }
 
-
 /**
  * Функция должна освободить все SLAB, которые не содержат
  * занятых объектов. Если SLAB не использовался для аллокации
@@ -191,18 +206,13 @@ void cache_shrink(struct cache *cache)
     /* Реализуйте эту функцию. */
 }
 
-
-
-
-
 int main()
 {
-    int slab_;
-    size_t obj_;
-    getSlabParam(512, &slab_, &obj_);
+    cache test_cache;
+    cache_setup(&test_cache,100);
+    for (int i = 0; i < 79 ; i++){
+        cout << cache_alloc(&test_cache) << endl;
+    }
 
-    cout << "Aligned pointer: " << alloc_slab(0) << endl;
-    cout << "For " << obj_ << " objects of 512 bytes " << slab_ << " level slab fits" << endl;
-    cout << hex << (size_t)(~0 << (5 + 12)) << endl;
     return 0;
 }
