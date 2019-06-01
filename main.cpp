@@ -69,7 +69,6 @@ void free_slab(void *slab){
 
 struct slab_t{
     void *data;
-    size_t free_obj;
     list<void*> obj_list;
 };
 
@@ -86,7 +85,6 @@ void initSlab(slab_t *pSlab, struct cache *cache)
 {
     pSlab->data = alloc_slab(cache->slab_order);
     size_t n = cache->slab_objects;
-    pSlab->free_obj = n;
     void *obj_ptr = pSlab->data;
     while(n) {
         pSlab->obj_list.push_back(obj_ptr);
@@ -106,13 +104,7 @@ void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
        slab_size *= 2;
    }
    *slab_order = tmp_order;
-   size_t tmp_number = slab_size/obj_size;
-   size_t meta = tmp_number*sizeof(void*) + sizeof(slab_t);
-   while (meta + obj_size*tmp_number > slab_size){
-        tmp_number--;
-        meta = tmp_number*sizeof(void*) + sizeof(slab_t);
-   }
-   *obj_number = tmp_number;
+   *obj_number = slab_size/obj_size;
 }
 
 /**
@@ -161,7 +153,6 @@ void *cache_alloc(struct cache *cache)
             cache->partial_slabs.push_back(slab);
             void *ptr = cache->partial_slabs.back().obj_list.back();
             cache->partial_slabs.back().obj_list.pop_back();
-            cache->partial_slabs.back().free_obj--;
             return ptr;
         }
         cout << "Alloc from free slab" << endl;
@@ -172,8 +163,7 @@ void *cache_alloc(struct cache *cache)
         cout << "Alloc from partial slab" << endl;
         void *ptr = cache->partial_slabs.back().obj_list.back();
         cache->partial_slabs.back().obj_list.pop_back();
-        cache->partial_slabs.back().free_obj--;
-        if (cache->partial_slabs.back().free_obj == 0) {
+        if (cache->partial_slabs.back().obj_list.size() == 0) {
             cout << "Partial is full" << endl;
             cache->full_slabs.push_back(cache->partial_slabs.back());
             cache->partial_slabs.pop_back();
@@ -192,8 +182,39 @@ void *cache_alloc(struct cache *cache)
 void cache_free(struct cache *cache, void *ptr)
 {
     /* Реализуйте эту функцию. */
-    void *slab_data_ptr = (void*)((int)ptr & (~0 << (cache->slab_order + 12)));
-    cout << slab_data_ptr << endl;
+    void *slab_data_ptr = (void*)((size_t)ptr & (~0 << (cache->slab_order + 12)));
+    auto it = cache->partial_slabs.begin();
+    while (it != cache->partial_slabs.end()) {
+        if ((*it).data == slab_data_ptr) {
+            (*it).obj_list.push_back(ptr);
+            cout << "From partial slab: " << slab_data_ptr << " .Item: " << ptr << " .Free: " << (*it).obj_list.size() << endl;
+            if ((*it).obj_list.size() == cache ->slab_objects) {
+                cout << "Partial became free" << endl;
+                cache->free_slabs.push_back(*it);
+                cache->partial_slabs.erase(it);
+            }
+            return;
+        }
+        ++it;
+    }
+    it = cache->full_slabs.begin();
+    while (it != cache->full_slabs.end()) {
+        if ((*it).data == slab_data_ptr) {
+            (*it).obj_list.push_back(ptr);
+
+            cout << "From full slab: " << slab_data_ptr << " .Item: " << ptr << " .Free: " << (*it).obj_list.size() << endl;
+            if ((*it).obj_list.size() == cache ->slab_objects) {
+                cache->free_slabs.push_back(*it);
+                cout << "Full became free" << endl;
+            } else {
+                cache->partial_slabs.push_back(*it);
+                cout << "Full became partial" << endl;
+            }
+            cache->full_slabs.erase(it);
+            return;
+        }
+        ++it;
+    }
 }
 
 /**
@@ -211,17 +232,23 @@ void cache_shrink(struct cache *cache)
 int main()
 {
     cache test_cache;
-    cache_setup(&test_cache,100);
-    /*
+    cache_setup(&test_cache,64);
+
+    list<void*> ptr_list;
+    cout << "FREE: " << test_cache.free_slabs.size() << "  PARTIAL: " << test_cache.partial_slabs.size() <<
+    "  FULL: " << test_cache.full_slabs.size() << endl;
     for (int i = 0; i < 79 ; i++){
-        cout << cache_alloc(&test_cache) << endl;
+        ptr_list.push_back(cache_alloc(&test_cache));
+        cout << ptr_list.back() << endl;
     }
-*/
-    cout << cache_alloc(&test_cache) << endl;
-    cout << cache_alloc(&test_cache) << endl;
-    cout << cache_alloc(&test_cache) << endl;
-    void *ptr = cache_alloc(&test_cache);
-    cout << ptr << endl;
-    cache_free(&test_cache,ptr);
+    cout << "FREE: " << test_cache.free_slabs.size() << "  PARTIAL: " << test_cache.partial_slabs.size() <<
+    "  FULL: " << test_cache.full_slabs.size() << endl;
+
+    for (int i = 0; i < 79 ; i++){
+        cache_free(&test_cache, ptr_list.back());
+        ptr_list.pop_back();
+    }
+    cout << "FREE: " << test_cache.free_slabs.size() << "  PARTIAL: " << test_cache.partial_slabs.size() <<
+    "  FULL: " << test_cache.full_slabs.size() << endl;
     return 0;
 }
