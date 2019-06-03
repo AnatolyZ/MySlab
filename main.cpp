@@ -73,22 +73,48 @@ void free_slab(void *slab){
 #define MIN_OBJECTS_NUM 1
 #define MAX_OBJECTS_NUM 64
 
-struct slab_t{
-    uint8_t* data;
-    size_t free_counter;
-    slab_t* next;
+struct object_t {
+    object_t *next;
+    void *data;
 };
+
+struct slab_t {
+    object_t *free_object;
+    size_t free_counter;
+    slab_t *next;
+};
+
 struct cache {
-    slab_t* empty_slabs;/* список пустых SLAB-ов для поддержки cache_shrink */
-    slab_t* partial_slabs;/* список частично занятых SLAB-ов */
-    slab_t* full_slabs;/* список заполненых SLAB-ов */
+    slab_t *empty_slabs;/* список пустых SLAB-ов для поддержки cache_shrink */
+    slab_t *partial_slabs;/* список частично занятых SLAB-ов */
+    slab_t *full_slabs;/* список заполненых SLAB-ов */
 
     size_t object_size; /* размер аллоцируемого объекта */
     int slab_order; /* используемый размер SLAB-а */
     size_t slab_objects; /* количество объектов в одном SLAB-е */
 };
 
-
+slab_t* new_free_slab(struct cache *cache) {
+    size_t obj_num = cache->slab_objects;
+    slab_t *slab = (slab_t*)alloc_slab(cache->slab_order);
+    char *ctrl_ptr = (char*)(slab) + sizeof(slab_t);
+    char *data_ptr = ctrl_ptr + obj_num * sizeof(object_t);
+    slab->next = NULL;
+    slab->free_counter = obj_num;
+    slab->free_object = (object_t*) ctrl_ptr;
+    for (size_t i = 0; i < obj_num; ++i) {
+        object_t *obj = (object_t*)ctrl_ptr;
+        obj->data = (void *)data_ptr;
+        data_ptr += cache->object_size;
+        ctrl_ptr += sizeof(object_t);
+        if (i == obj_num - 1) {
+            obj->next = NULL;
+        } else {
+            obj->next = (object_t*)ctrl_ptr;
+        }
+    }
+    return slab;
+}
 
 void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
    size_t slab_size = 4096;
@@ -100,10 +126,10 @@ void getSlabParam(size_t obj_size, int *slab_order, size_t *obj_number){
    }
    *slab_order = tmp_order;
    size_t tmp_number = slab_size/obj_size;
-   size_t meta = tmp_number*sizeof(void*) + sizeof(slab_t);
-   while (meta + obj_size*tmp_number > slab_size){
+   size_t meta = tmp_number * sizeof(object_t) + sizeof(slab_t);
+   while (meta + obj_size * tmp_number > slab_size){
         tmp_number--;
-        meta = tmp_number*sizeof(void*) + sizeof(slab_t);
+        meta = tmp_number * sizeof(object_t) + sizeof(slab_t);
    }
    *obj_number = tmp_number;
 }
@@ -124,6 +150,7 @@ void cache_setup(struct cache *cache, size_t object_size)
     cache->full_slabs = NULL;
     cache->object_size = object_size;
     getSlabParam(object_size, &cache->slab_order, &cache->slab_objects);
+    cache->object_size = object_size;
 }
 /**
  * Функция освобождения будет вызвана когда работа с
@@ -134,9 +161,30 @@ void cache_setup(struct cache *cache, size_t object_size)
  **/
 void cache_release(struct cache *cache)
 {
-    /* Реализуйте эту функцию. */
-}
+    slab_t *ptr = cache->empty_slabs;
+    while (ptr) {
+        slab_t *tmp = ptr->next;
+        free_slab((void*)ptr);
+        ptr = tmp;
+    }
+    cache->empty_slabs = NULL;
 
+    ptr = cache->partial_slabs;
+    while (ptr) {
+        slab_t *tmp = ptr->next;
+        free_slab((void*)ptr);
+        ptr = tmp;
+    }
+    cache->partial_slabs = NULL;
+
+    ptr = cache->full_slabs;
+    while (ptr) {
+        slab_t *tmp = ptr->next;
+        free_slab((void*)ptr);
+        ptr = tmp;
+    }
+    cache->full_slabs = NULL;
+}
 
 /**
  * Функция аллокации памяти из кеширующего аллокатора.
@@ -150,7 +198,6 @@ void *cache_alloc(struct cache *cache)
     /* Реализуйте эту функцию. */
 }
 
-
 /**
  * Функция освобождения памяти назад в кеширующий аллокатор.
  * Гарантируется, что ptr - указатель ранее возвращенный из
@@ -161,7 +208,6 @@ void cache_free(struct cache *cache, void *ptr)
     /* Реализуйте эту функцию. */
 }
 
-
 /**
  * Функция должна освободить все SLAB, которые не содержат
  * занятых объектов. Если SLAB не использовался для аллокации
@@ -171,20 +217,26 @@ void cache_free(struct cache *cache, void *ptr)
  **/
 void cache_shrink(struct cache *cache)
 {
-    /* Реализуйте эту функцию. */
+    slab_t *ptr = cache->empty_slabs;
+    while (ptr) {
+        slab_t *tmp = ptr->next;
+        free_slab((void*)ptr);
+        ptr = tmp;
+    }
+    cache->empty_slabs = NULL;
 }
-
-
-
-
 
 int main()
 {
-    int slab_;
-    size_t obj_;
-    getSlabParam(512, &slab_, &obj_);
-
-    cout << "Aligned pointer: " << alloc_slab(0) << endl;
-    cout << "For " << obj_ << " objects of 512 bytes " << slab_ << " level slab fits" << endl;
+    cache test_cache;
+    cache_setup(&test_cache,64);
+    slab_t *slab = new_free_slab(&test_cache);
+    cout << "Slab free object: " << slab->free_counter << endl;
+    cout << "Slab next free object: " << slab->free_object << endl;
+    cout << "Slab next free data: " << slab->free_object->data << endl;
+    cout << "Slab next next free data: " << *(uint32_t*)(((int8_t*)slab->free_object->data)-8) << endl;    cout << "Next slab: " << slab->next << endl;
+    cout << "Slab_t: " << sizeof(slab_t) << endl;
+    cout << "Object_t: " << sizeof(object_t) << endl;
+    cout << "For " << test_cache.slab_objects << " objects of " << test_cache.object_size << " bytes " << test_cache.slab_order << " level slab fits" << endl;
     return 0;
 }
